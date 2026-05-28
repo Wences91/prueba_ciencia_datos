@@ -1,0 +1,808 @@
+---
+title: "Fundamentos de ciencia de datos en R"
+author: "Wenceslao Arroyo-Machado<br><a href='https://twitter.com/Wences91' style='font-size: 14px'>@Wences91</a>"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    css: style.css
+    theme: journal
+    highlight: zenburn
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+Esta notebook recoge los contenidos del curso de fundamentos de ciencia de datos en R. Está pensado para quienes ya tienen un conocimiento de R a nivel principiante/medio.
+
+# Antes de empezar
+
+## Sobre el uso de IA en el aprendizaje
+
+Antes de meternos en código, un comentario. La IA generativa está siendo de gran ayuda para programar, pero conviene tener claras algunas cosas:
+
+-   Apoyarse en IA para escribir el código completo es **ineficiente**, especialmente cuando aún no dominas la sintaxis, ya que cualquier resultado requiere supervisión y validación manual.
+-   Si no entiendes lo que la IA te devuelve, pierdes capacidad de control sobre tu propio análisis y oportunidades de aprendizaje.
+-   En etapas iniciales de aprendizaje, escribir el código a mano refuerza la lógica de programación y te hace más autónoma/o a medio plazo.
+
+Dicho esto, en el terreno de la IA [**Claude**](https://claude.ai) es una herramienta potentísima para resolver dudas concretas, explicar errores o sugerir alternativas. Úsala como compañera de aprendizaje, no como sustituto.
+
+## Configuración del entorno
+
+Antes de ejecutar la notebook, asegúrate de que tu proyecto tiene la siguiente estructura.
+
+```         
+curso_R/
+├── README.md
+├── notebook.Rmd
+├── style.css
+├── data/
+│   ├── publications.tsv
+│   └── top_authors.tsv
+└── results/
+```
+
+Te recomiendo trabajar siempre con un proyecto de RStudio (*File \> New Project*), ya que fija automáticamente el directorio de trabajo. Si no, tendrás que hacerlo manualmente con `setwd()`.
+
+## Paquetes
+
+Cargamos los paquetes que vamos a usar a lo largo de toda la sesión.
+
+```{r libraries}
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(viridis)
+library(corrplot) # este paquete es necesario para los gráficos de correlación
+library(broom)
+library(tm)
+library(wordcloud)
+```
+
+Si te falta alguno, instálalo con `install.packages('nombre_paquete')`.
+
+## Datos
+
+Vamos a trabajar con un subconjunto del dataset [*A comprehensive dataset of the Spanish research output and its associated social media and altmetric mentions (2016-2020)*](https://zenodo.org/records/6473952). Recoge publicaciones de instituciones españolas con sus menciones en medios y redes sociales.
+
+Contamos con dos ficheros.
+
+-   **publications.tsv** (219988 x 24), datos de las publicaciones y sus menciones altmétricas.
+    -   *id*, identificador único de la publicación
+    -   *title*, título completo
+    -   *year*, año de publicación
+    -   *type*, tipo de documento
+    -   *journal*, revista
+    -   *esi*, categoría/s ESI (puede contener varias separadas por `;`)
+    -   *influscore*, Altmetric Attention Score
+    -   *news, blogs, policy, patent, twitter, ...*, número de menciones por fuente
+-   **top_authors.tsv** (4209 x 4), autores más mencionados en medios y redes sociales.
+    -   *name*, nombre del investigador/a
+    -   *orcid*, identificador ORCID
+    -   *organization*, institución de afiliación
+    -   *publications*, identificadores de publicaciones separados por `;`
+
+# Lectura de datos
+
+Recordemos los aspectos clave a revisar antes de importar cualquier fichero de texto plano.
+
+1.  **Codificación**, normalmente UTF-8.
+2.  **Delimitador**, con coma, punto y coma o tabulador.
+3.  **Calificador**, comillas dobles o simples para proteger cadenas que contienen el delimitador.
+4.  **Caracteres nulos**, cadenas que se reconocerán como `NA`.
+
+## Con `read.table()`
+
+La función base (de ella derivan otras como `read.csv` o `read.delim`). Es lenta con ficheros grandes pero útil para entender los argumentos.
+
+```{r read_table, eval=FALSE}
+df <- read.table(file = 'data/publications.tsv',
+                 header = TRUE,
+                 sep = '\t',
+                 quote =  c('', 'NA'),
+                 na.strings = '',
+                 comment.char = '',
+                 encoding = 'UTF-8')
+
+df <- read.delim(file = 'data/publications.tsv',
+                 quote =  c('', 'NA'),
+                 na.strings = '',
+                 encoding = 'UTF-8')
+```
+
+## Con `fread()`
+
+Mucho más rápida y robusta. Es la opción recomendada para ficheros grandes.
+
+```{r read_fread}
+df <- fread(file = 'data/publications.tsv',
+            quote = '',
+            na.strings = c('', 'NA'),
+            encoding = 'UTF-8',
+            showProgress = TRUE, # en archivos grandes para ver el proceso
+            data.table = FALSE)  # si no vas a trabajar con data.table
+
+df_authors <- fread(file = 'data/top_authors.tsv',
+                    quote = '',
+                    na.strings = '',
+                    encoding = 'UTF-8',
+                    data.table = FALSE)
+```
+
+# Exploración inicial
+
+Antes de procesar nada, dedica siempre un rato a mirar qué tienes entre manos. Es la diferencia entre análisis sólidos y análisis frágiles que se vienen abajo por un detalle no detectado a tiempo.
+
+## Dimensiones y tipos
+
+```{r exploracion_basica}
+dim(df)
+dim(df_authors)
+
+str(df[, 1:8])
+
+head(df)
+```
+
+## Distribuciones de las variables clave
+
+Echamos un ojo a las variables que estructuran el análisis 👀.
+
+```{r distribucion_year_type}
+table(df$year, exclude = FALSE)
+
+table(df$type, exclude = FALSE)
+```
+
+Aprovechamos para fijarnos en un detalle. El dataset cubre publicaciones de 2016 a 2020, pero aparecen algunos registros de 2021. Lo normal en estos casos es deberse a desfases en la indexación. Conviene tenerlos identificados para decidir qué hacer con ellos.
+
+Igualmente hay algunos casos de fehcas con valores nulos, conviene considerar si se usan o no.
+
+```{r nulos_fechas}
+df <- df[which(!is.na(df$year)),]
+```
+
+```{r distribucion_esi}
+# Top 10 valores brutos del campo esi (sin separar todavía)
+sort(table(df$esi), decreasing = TRUE)[1:20]
+```
+
+Te darás cuenta de que hay campos `esi` contienen varias categorías concatenadas con `;`. Esto lo abordamos un poco más adelante.
+
+## Resumen estadístico de las menciones
+
+```{r summary_metricas}
+summary(df[, c('influscore', 'news', 'blogs', 'policy', 'twitter', 'facebook')])
+```
+
+¿Ves algo raro? 🤨 La media es bastante más alta que la mediana en todas las fuentes. Es la firma típica de **distribuciones muy sesgadas a la derecha**. La mayoría de publicaciones tienen pocas menciones y un grupo reducido acumula muchas. Es algo que tendremos muy presente al modelar y visualizar.
+
+## Revisión de valores nulos y de ceros
+
+En las publicaciones no hay valores nulos. Pero, ¿qué pasa con los ceros? Si una fuente tiene un 99% de ceros, modelar sobre ella tiene poco sentido. Calculamos el porcentaje de publicaciones con al menos una mención en cada fuente.
+
+```{r pct_no_cero}
+sources <- c('news','blogs','policy','patent','twitter','post_peer','weibo',
+             'facebook','wikipedia','google','linkedin','reddit','pinterest',
+             'f1000','stack_overflow','youtube','syllabus')
+
+pct_no_cero <- sapply(df[, sources], function(x) round(mean(x > 0) * 100, 2))
+sort(pct_no_cero, decreasing = TRUE)
+```
+
+Twitter está en casi todas las publicaciones, Facebook en un cuarto, y la mayoría de las demás fuentes están bajo el 3%. Hay incluso fuentes con **0% de menciones** (`linkedin`, `pinterest`, `syllabus`). Son columnas que en la práctica no aportan información. Las descartamos del análisis.
+
+Esto se ve muchísimo mejor con un gráfico. Aprovechamos para un primer contacto con `ggplot2`, que veremos en detalle más adelante.
+
+```{r grafico_no_cero, fig.width=8, fig.height=5}
+pct_df <- data.frame(source = names(pct_no_cero),
+                     pct = pct_no_cero)
+
+ggplot(pct_df, aes(x = reorder(source, pct), y = pct)) +
+  geom_col(fill = '#5880ab') +
+  geom_text(aes(label = paste0(pct, '%')), hjust = -0.1, size = 3) +
+  coord_flip() +
+  ylim(0, 105) +
+  labs(x = NULL, y = '% de publicaciones con al menos una mención') +
+  theme_classic()
+```
+
+La imagen es clara. Twitter domina, un puñado de fuentes tiene presencia moderada, y la cola larga apenas aporta señal. Esto condiciona qué fuentes merece la pena modelar.
+
+```{r columnas_vacias}
+#cols_vacias <- names(pct_no_cero)[pct_no_cero == 0]
+cols_vacias <- c('weibo', 'linkedin', 'pinterest', 'syllabus')
+cols_vacias
+```
+
+En el dataset de autores la cosa cambia. Aquí sí hay nulos.
+
+```{r autores_nulos}
+colSums(is.na(df))
+colSums(is.na(df_authors))
+
+# Porcentaje de autores sin ORCID
+round(mean(is.na(df_authors$orcid)) * 100, 2)
+```
+
+Casi un 20% de los autores destacados no tienen ORCID. Pequeña nota, este es el típico problema que hay al cruzar datos bibliográficos. ORCID es el identificador único de investigadores y aún no está universalizado.
+
+# Procesamiento
+
+En esta sección recorremos las operaciones que forman el día a día del análisis de datos. Todas con `dplyr` y el operador pipe `%>%`, que encadena operaciones tomando como primer argumento el resultado del paso anterior.
+
+> 💡 El pipe permite leer el código como una receta, de arriba abajo, en lugar de anidar funciones. `df %>% filter(...) %>% select(...)` se lee como "del dataframe, filtra estas filas, luego selecciona estas columnas".
+
+## Filtrar filas
+
+Filtrar filas es quedarse con las observaciones que cumplen una condición. Por ejemplo, papers y reviews publicados entre 2016 y 2020.
+
+```{r filtrar_filas}
+df_papers <- df %>%
+  filter(type %in% c('paper', 'review'), # eliminamos como ejemplo editorial y letter
+         year >= 2016 & year <= 2020,
+         !is.na(esi)) # esto ya sabemos que no hace falta, pero por ilustrar
+
+nrow(df_papers)
+```
+
+Cuando pasas varias condiciones a `filter()` separadas por comas, se aplican todas a la vez con AND lógico. Es equivalente a usar `&`.
+
+> 💡 Los operadores que más vas a usar en filtros son `==`, `!=`, `>`, `<`, `>=`, `<=`, `%in%` para pertenencia a un conjunto, `is.na()` para nulos, y `!` para negar.
+
+## Seleccionar columnas
+
+Seleccionar columnas es quedarse con las variables que te interesan. Reduce el ruido y hace los datos más manejables.
+
+```{r seleccionar_columnas}
+df_papers <- df_papers %>%
+  select(id, title, year, type, journal, esi, influscore,
+         news, blogs, policy, twitter, facebook, wikipedia)
+
+head(df_papers, 3)
+```
+
+Puedes seleccionar también por exclusión con el signo `-`, por ejemplo `select(-title)` quita la columna `title` y mantiene todas las demás. Y hay *helpers* muy útiles como `starts_with()`, `ends_with()` o `contains()`.
+
+## Trabajar con campos multi-valor
+
+El campo `esi` contiene en muchos casos varias categorías separadas por `;` (cuidado con el espacio de detrás). Para analizarlo por categoría individual, necesitamos pasar a *formato largo*, una fila por publicación-categoría.
+
+La forma más limpia es con `tidyr::separate_rows()`, que divide y expande en un solo paso.
+
+```{r separate_rows}
+df_esi <- df_papers %>%
+  separate_rows(esi, sep = '; ')
+
+nrow(df_esi)
+```
+
+Hemos pasado de `r nrow(df_papers)` filas a `r nrow(df_esi)` filas. Cada publicación con N categorías ESI aparece ahora N veces.
+
+> 💡 Esto es **clave**. Si una misma publicación pertenece a 3 campos ESI, al agregar por ESI esa publicación se contará 3 veces. Es lo correcto si quieres analizar el comportamiento por campo, pero no si quieres contar publicaciones únicas. Tenlo presente.
+
+Veamos los campos ESI más frecuentes ahora que están separados, ahora deben salir 22 campos.
+
+```{r top_esi}
+df_esi %>%
+  count(esi, sort = TRUE)
+```
+
+## Cruzar dataframes (joins)
+
+Cruzar dataframes consiste en combinar información de dos tablas usando una clave común. Las cuatro opciones básicas.
+
+-   **inner_join()**, mantiene solo las filas con coincidencia en ambos.
+-   **left_join()**, mantiene todas las filas del primero y añade las del segundo si encuentra coincidencia.
+-   **right_join()**, lo mismo que antes pero al revés.
+-   **full_join()**, mantiene todo de ambos.
+
+Vamos a enriquecer las publicaciones con información de autoría. Primero pasamos los autores a formato largo, igual que hicimos con ESI.
+
+```{r autores_long}
+df_authors_long <- df_authors %>%
+  separate_rows(publications, sep = '; ') %>%
+  mutate(id = publications) %>%
+  mutate(id = as.integer(id)) %>%
+  select(name, orcid, organization, id)
+
+head(df_authors_long, 3)
+```
+
+Ahora cruzamos. Como solo queremos publicaciones que tengan algún autor destacado, usamos `inner_join()`.
+
+```{r inner_join}
+#df_papers_authors <- df_papers %>%
+#  inner_join(df_authors_long, by = 'id')
+
+df_papers_authors <- inner_join(df_papers, df_authors_long, by = 'id')
+#df_papers_authors <- left_join(df_papers, df_authors_long, by = 'id')
+
+
+nrow(df_papers_authors)
+```
+
+> 💡 Si la columna clave se llama distinto en cada dataframe, lo indicas con `by = c('id' = 'pub_id')`. Y si quieres usar varias columnas como clave, le pasas un vector.
+
+## Agregar datos
+
+Agregar significa agrupar varias filas en una sola aplicando una operación de resumen, como contar, sumar o promediar.
+
+La pareja `group_by()` + `summarise()` es la herramienta clave.
+
+-   `group_by()` define la unidad de análisis (por qué variable/s agrupamos).
+-   `summarise()` calcula los resúmenes dentro de cada grupo.
+
+Un ejemplo. Número de publicaciones por año y tipo.
+
+```{r groupby_basico}
+df_papers %>%
+  group_by(year, type) %>%
+  summarise(total = n())
+```
+
+> 💡 La función `n()` devuelve el número de filas del grupo actual. Es la operación de agregación más usada junto con `mean()` y `sum()`.
+
+Otro ejemplo más rico. Métricas resumen por campo ESI.
+
+```{r resumen_esi}
+df_esi_summary <- df_esi %>%
+  group_by(esi) %>%
+  summarise(n_pubs = n(),
+            influ_mean = mean(influscore),
+            influ_median = median(influscore),
+            twitter_mean = mean(twitter),
+            news_mean = mean(news),
+            policy_mean = mean(policy)) %>%
+  arrange(desc(n_pubs))
+
+head(df_esi_summary, 8)
+```
+
+## Crear y transformar variables
+
+`mutate()` añade columnas nuevas o modifica las existentes.
+
+```{r mutate}
+df_papers <- df_papers %>%
+  mutate(menciones_total = news + blogs + policy + twitter + facebook,
+         tiene_policy = policy > 0)
+
+df_papers %>%
+  count(tiene_policy) %>%
+  mutate(pct = round(n / sum(n) * 100, 2))
+```
+
+# Análisis estadístico
+
+## Matriz de correlaciones
+
+¿Cómo se relacionan las distintas fuentes de mención entre sí? Como las distribuciones son muy sesgadas, usamos correlación de **Spearman**, que se basa en rangos y es robusta frente a valores extremos. Pearson asumiría linealidad y normalidad, supuestos que aquí no se cumplen.
+
+```{r correlaciones}
+metric_vars <- c('news', 'blogs', 'policy',
+                 'twitter', 'facebook', 'wikipedia')
+
+cor_matrix <- cor(df_papers[, metric_vars],
+                  method = 'spearman',
+                  use = 'pairwise.complete.obs')
+
+round(cor_matrix, 2)
+```
+
+Visualizamos la matriz con `corrplot`. Es muchísimo más legible que mirar números.
+
+```{r corrplot, fig.width=8, fig.height=7}
+corrplot(cor_matrix,
+         method = 'color',
+         type = 'upper',
+         order = 'hclust',
+         addCoef.col = 'black',
+         number.cex = 0.8,
+         tl.col = 'black',
+         tl.srt = 45,
+         col = colorRampPalette(c('#5880ab', 'white', '#f47267'))(200),
+         diag = FALSE)
+```
+
+El parámetro `order = 'hclust'` agrupa las variables por similitud usando clustering jerárquico. Permite ver bloques de fuentes que se comportan parecido.
+
+## Regresión lineal
+
+Vamos a modelar una pregunta con sentido. **¿Se puede predecir cuántas menciones en Twitter recibe una publicación a partir de su presencia en otras fuentes?** La idea de fondo es que una publicación que circula en noticias, blogs o Facebook probablemente también circula en Twitter.
+
+Aplicamos transformación logarítmica con `log1p()`, equivalente a `log(x + 1)`, para manejar la asimetría y los ceros.
+
+```{r regresion}
+df_reg <- df_papers %>%
+  mutate(log_twitter   = log1p(twitter),
+         log_news      = log1p(news),
+         log_blogs     = log1p(blogs),
+         log_policy    = log1p(policy),
+         log_facebook  = log1p(facebook),
+         log_wikipedia = log1p(wikipedia))
+
+modelo <- lm(log_twitter ~ log_news + log_blogs + log_policy +
+                           log_facebook + log_wikipedia,
+             data = df_reg)
+
+summary(modelo)
+```
+
+Vamos a la interpretación.
+
+-   Todos los coeficientes son positivos y significativos (valores `p` prácticamente cero). Más presencia en cualquiera de esas fuentes se asocia con más menciones en Twitter.
+-   Facebook es el predictor con mayor coeficiente, la asociación entre ambas redes sociales es la más fuerte.
+-   El R² indica qué proporción de la varianza en Twitter queda explicada por el resto de fuentes. No es altísimo, lo cual es esperable, ya que Twitter tiene una dinámica propia que estas fuentes no capturan del todo.
+
+El paquete `broom` ofrece los resultados en formato dataframe, mucho más manejable.
+
+```{r broom}
+tidy(modelo, conf.int = TRUE)
+glance(modelo)
+```
+
+## Visualizar el modelo con ggplot
+
+Los gráficos automáticos están bien para diagnóstico, pero para comunicar resultados conviene construir los nuestros con `ggplot2`. Calculamos todo desde el propio objeto del modelo.
+
+Primero, un **forest plot** de los coeficientes con sus intervalos de confianza. Lo extraemos con `broom`.
+
+```{r coef_plot, fig.width=8, fig.height=4}
+coefs <- tidy(modelo, conf.int = TRUE) %>%
+  filter(term != '(Intercept)')
+
+ggplot(coefs, aes(x = estimate, y = reorder(term, estimate))) +
+  geom_vline(xintercept = 0, linetype = 'dashed', color = 'grey50') +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0.2, color = '#5880ab', linewidth = 1) +
+  geom_point(color = '#5880ab', size = 4) +
+  labs(x = 'Coeficiente (IC 95%)', y = NULL) +
+  theme_classic()
+```
+
+Se ve de un vistazo que Facebook tiene el mayor efecto y todos los intervalos quedan lejos del cero.
+
+Segundo, un gráfico de **predicho frente a observado**. La función `augment()` de `broom` añade las predicciones y residuos al dataframe original.
+
+```{r pred_obs, fig.width=7, fig.height=6}
+aug <- augment(modelo)
+
+ggplot(aug, aes(x = .fitted, y = log_twitter)) +
+  geom_point(alpha = 0.1, color = '#5880ab') +
+  geom_abline(slope = 1, intercept = 0, color = '#bb3f25', linewidth = 1) +
+  labs(x = 'Predicho (log Twitter)',
+       y = 'Observado (log Twitter)') +
+  theme_classic()
+```
+
+La línea roja marca la predicción perfecta. La nube de puntos por debajo y por encima muestra dónde el modelo acierta y dónde se queda corto.
+
+## Añadir el campo ESI al modelo
+
+¿Mejora el modelo si tenemos en cuenta el área de conocimiento? Cada disciplina tiene su propia cultura de difusión. Vamos a incorporar el campo ESI principal como variable categórica.
+
+Primero extraemos el primer campo ESI de cada publicación y agrupamos los menos frecuentes en una categoría común.
+
+```{r esi_factor}
+top_esi <- df_esi %>%
+  count(esi, sort = TRUE) %>%
+  head(6) %>%
+  pull(esi)
+
+df_reg <- df_reg %>%
+  mutate(esi_main = trimws(sub('; ', '', esi)),
+         esi_grp = ifelse(esi_main %in% top_esi, esi_main, 'Otros'),
+         esi_grp = as.factor(esi_grp))
+
+table(df_reg$esi_grp)
+```
+
+> 💡 Cuando metes una variable categórica con muchos niveles en un modelo, generas muchos coeficientes y pierdes interpretabilidad. Agrupar los niveles minoritarios en "Otros" es una práctica habitual y sensata.
+
+Ahora ajustamos el modelo ampliado. R convierte automáticamente el factor en variables indicadoras.
+
+```{r modelo_esi}
+modelo_esi <- lm(log_twitter ~ log_news + log_blogs + log_policy +
+                              log_facebook + log_wikipedia + esi_grp,
+                 data = df_reg)
+
+glance(modelo_esi)
+```
+
+Comparamos el R² de ambos modelos para ver si el área aporta.
+
+```{r comparar_modelos}
+data.frame(
+  modelo = c('Solo fuentes', 'Fuentes + ESI'),
+  r2_adj = c(glance(modelo)$adj.r.squared,
+             glance(modelo_esi)$adj.r.squared)
+)
+```
+
+El área de conocimiento aporta una mejora modesta. Tiene sentido, la coherencia entre fuentes pesa más que la disciplina, pero el campo ESI añade algo de información.
+
+Visualizamos el efecto de cada área con un gráfico de barras de sus coeficientes.
+
+```{r esi_coef_plot, fig.width=8, fig.height=4.5}
+coefs_esi <- tidy(modelo_esi) %>%
+  filter(grepl('esi_grp', term)) %>%
+  mutate(area = sub('esi_grp', '', term))
+
+ggplot(coefs_esi, aes(x = reorder(area, estimate), y = estimate,
+                      fill = estimate > 0)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = c('TRUE' = '#5880ab', 'FALSE' = '#bb3f25'),
+                    guide = 'none') +
+  labs(x = NULL, y = 'Coeficiente (vs categoría de referencia)') +
+  theme_classic()
+```
+
+Cada barra muestra cuánto más o menos se tuitea una publicación de ese campo respecto a la categoría de referencia, manteniendo igual el resto de fuentes. Las disciplinas con barra positiva tienen un plus de visibilidad en Twitter no explicado por las otras menciones.
+
+## Diagnóstico del modelo
+
+Un modelo no se interpreta sin antes comprobar sus supuestos. Los gráficos de diagnóstico estándar dan mucha información de un vistazo.
+
+```{r diagnostico, fig.width=8, fig.height=8}
+par(mfrow = c(2, 2))
+plot(modelo)
+par(mfrow = c(1, 1))
+```
+
+Los residuos muestran problemas claros, el supuesto de normalidad no se cumple del todo. El modelo se queda corto prediciendo las publicaciones con muchas menciones, algo esperable al modelar datos de conteo muy sesgados.
+
+# Visualización
+
+Toca representar los datos. Usamos `ggplot2`, que sigue una sintaxis de capas con el operador `+`. La estructura básica de cualquier gráfico es siempre la misma.
+
+``` r
+ggplot(data = MI_DATAFRAME, aes(x = VARIABLE_X, y = VARIABLE_Y)) +
+  geom_TIPO() +
+  labs(...) +
+  theme_...()
+```
+
+Tres conceptos esenciales.
+
+-   `aes()` define las **estéticas**, qué variables se mapean a qué propiedades visuales (x, y, color, tamaño, forma).
+-   Las funciones `geom_*()` son las **capas geométricas**, qué tipo de gráfico se dibuja (puntos, barras, líneas).
+-   Las capas se suman con `+` y se pueden ir añadiendo títulos, escalas, temas, etc.
+
+## Distribución de la variable influencia
+
+Un histograma con escala logarítmica en X muestra mucho mejor distribuciones sesgadas como esta.
+
+```{r hist_influ, fig.width=8, fig.height=4.5}
+ggplot(df_papers, aes(x = twitter)) +
+  geom_histogram(bins = 30, fill = '#5880ab', color = 'white') +
+  labs(x = 'Twitter',
+       y = 'Número de publicaciones') +
+  theme_classic()
+
+
+indicadores <- c("news", "blogs", "policy", "twitter", "facebook", "wikipedia")
+
+df_long <- df_papers %>%
+  select(all_of(indicadores)) %>%
+  pivot_longer(everything(), names_to = "indicador", values_to = "valor")
+
+ggplot(df_long, aes(x = reorder(indicador, valor, FUN = median), y = valor, fill = indicador)) +
+  geom_boxplot(outliers = FALSE, width = 0.6, alpha = 0.85) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(x = NULL, y = "Menciones") +
+  coord_flip() +
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_text(margin = margin(t = 8)),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3)
+  )
+```
+
+Sumamos 1 antes de aplicar el log para que los ceros no se queden fuera.
+
+## Heatmap por campo ESI, primer intento
+
+Vamos a construir un mapa de calor con las menciones promedio por campo ESI y fuente. Es una visualización muy potente para ver patrones.
+
+Primera versión, directa y sin pensar.
+
+```{r heatmap_v1_data}
+heatmap_data <- df_esi %>%
+  group_by(esi) %>%
+  summarise(across(c(news, blogs, policy, twitter, facebook, wikipedia),
+                   mean)) %>%
+  pivot_longer(cols = -esi, names_to = 'source', values_to = 'mean_mentions')
+
+head(heatmap_data)
+```
+
+> 💡 `pivot_longer()` pasa el dataframe de formato ancho (una columna por fuente) a formato largo (una fila por par esi-fuente). Es el formato que `ggplot` necesita para mapear cada celda del heatmap.
+
+```{r heatmap_v1, fig.width=9, fig.height=6}
+ggplot(heatmap_data, aes(x = source, y = esi, fill = mean_mentions)) +
+  geom_tile()
+```
+
+No se ve nada útil. Twitter aplasta toda la escala, porque su rango de valores es órdenes de magnitud mayor que el del resto. El resto de columnas se ve uniforme y oscuro. Vamos a arreglarlo.
+
+## Heatmap por campo ESI, mejorado
+
+Dos mejoras combinadas.
+
+1.  **Normalizar cada fuente por separado** con min-max scaling. Cada columna queda entre 0 y 1, comparando cada ESI con el rango observado en esa misma fuente.
+2.  **Usar la paleta viridis**, perceptualmente uniforme y accesible para personas con daltonismo.
+
+También filtramos a campos ESI con un mínimo de publicaciones para evitar resultados inestables.
+
+```{r heatmap_v2_data}
+big_esi <- df_esi %>%
+  count(esi) %>%
+  filter(n >= 500) %>%
+  pull(esi)
+
+heatmap_norm <- df_esi %>%
+  filter(esi %in% big_esi) %>%
+  group_by(esi) %>%
+  summarise(across(c(news, blogs, policy, twitter, facebook, wikipedia),
+                   mean)) %>%
+  mutate(across(-esi, ~ (.x - min(.x)) / (max(.x) - min(.x)))) %>%
+  pivot_longer(cols = -esi, names_to = 'source', values_to = 'mean_norm')
+
+head(heatmap_norm)
+```
+
+```{r heatmap_v2, fig.width=9, fig.height=6.5}
+ggplot(heatmap_norm, aes(x = source, y = esi, fill = mean_norm)) +
+  geom_tile(color = 'white', linewidth = 0.3) +
+  #scale_fill_viridis(name = 'Menciones\n(normalizado)') +
+  labs(x = 'Fuente', y = 'Campo ESI') +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid = element_blank())
+```
+
+Ahora sí se aprecian patrones. Cada columna se compara consigo misma, lo que destaca qué campos ESI son comparativamente más atractivos para cada tipo de fuente. Por ejemplo, Clinical Medicine domina en news, mientras que las ciencias sociales tienen más relevancia en policy.
+
+La función `scale_fill_viridis()` usa por defecto la paleta viridis, sencilla y muy legible. Si quisieras otra variante tienes `option = 'magma'`, `'plasma'`, `'inferno'` o `'cividis'`.
+
+Los títulos de las publicaciones son una mina de información que hasta ahora hemos ignorado. Vamos a sacarles partido con un análisis básico de frecuencia de términos.
+
+## Preparación del corpus
+
+Trabajamos con una muestra de 20000 títulos para que sea ágil. La función `Corpus()` de `tm` crea la estructura sobre la que aplicar las transformaciones.
+
+```{r corpus}
+set.seed(42)
+titulos <- sample(df_papers$title, 20000)
+
+corpus <- VCorpus(VectorSource(titulos))
+
+# Cadena de limpieza
+corpus <- corpus %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removeWords, stopwords('english')) %>%
+  tm_map(stripWhitespace)
+
+# Comprobamos el resultado en un título
+as.character(corpus[[1]])
+```
+
+## Matriz término-documento
+
+La estructura clave en minería de texto. Filas son palabras, columnas son documentos, valores son frecuencias.
+
+```{r tdm}
+tdm <- TermDocumentMatrix(corpus)
+tdm
+```
+
+Calculamos las palabras más frecuentes.
+
+```{r top_palabras}
+freqs <- slam::row_sums(tdm)
+top_palabras <- data.frame(palabra = names(freqs), freq = freqs) %>%
+  arrange(desc(freq)) %>%
+  head(25)
+
+top_palabras
+```
+
+## Visualización con barras
+
+```{r barras_palabras, fig.width=8, fig.height=5}
+ggplot(top_palabras, aes(x = reorder(palabra, freq), y = freq)) +
+  geom_col(fill = '#5880ab') +
+  coord_flip() +
+  labs(x = NULL, y = 'Frecuencia',
+       title = 'Palabras más frecuentes en los títulos') +
+  theme_classic()
+```
+
+## Nube de palabras
+
+Más visual, aunque limitada para comparar magnitudes con precisión. Para charlas o pósteres funciona bien.
+
+```{r wordcloud, fig.width=8, fig.height=6}
+wordcloud(words = top_palabras$palabra,
+          freq = top_palabras$freq,
+          max.words = 50,
+          colors = viridis(8),
+          random.order = FALSE)
+```
+
+# Clustering
+
+¿Se pueden agrupar los campos ESI según su perfil altmétrico? Es la pregunta natural cuando tienes un dataframe con observaciones (campos ESI) y variables (fuentes de mención). El algoritmo más sencillo y popular es **k-means**.
+
+## Preparación de los datos
+
+Construimos una matriz con perfiles altmétricos promedio por campo ESI.
+
+```{r cluster_data}
+perfiles <- df_esi %>%
+  filter(esi %in% big_esi) %>%
+  group_by(esi) %>%
+  summarise(across(c(news, blogs, policy, twitter, facebook, wikipedia),
+                   mean)) %>%
+  as.data.frame()
+
+rownames(perfiles) <- perfiles$esi
+perfiles_mat <- perfiles %>% select(-esi)
+
+head(perfiles_mat, 3)
+```
+
+## Estandarización
+
+K-means se basa en distancias euclídeas. Si una variable tiene un rango mucho mayor que las demás, dominará el cálculo. La solución es **estandarizar**, dejando todas las variables con media 0 y desviación 1.
+
+```{r escalar}
+perfiles_scaled <- scale(perfiles_mat)
+```
+
+## Elegir el número de clusters
+
+La función `kmeans()` necesita que le especifiquemos el número de grupos `k`. Un criterio común es el **método del codo**, que busca el punto donde añadir clusters deja de reducir sustancialmente la varianza intragrupo.
+
+```{r elbow, fig.width=7, fig.height=4}
+set.seed(42)
+elbow_data <- data.frame(
+  k = 2:8,
+  inertia = sapply(2:8, function(k) {
+    kmeans(perfiles_scaled, centers = k, nstart = 25)$tot.withinss
+  })
+)
+
+ggplot(elbow_data, aes(x = k, y = inertia)) +
+  geom_line(color = '#5880ab', linewidth = 1) +
+  geom_point(color = '#5880ab', size = 3) +
+  labs(x = 'Número de clusters (k)',
+       y = 'Inercia intragrupo',
+       title = 'Método del codo para elegir k') +
+  theme_classic()
+```
+
+El codo se aprecia alrededor de k = 4. Nos quedamos con ese valor.
+
+## Aplicar k-means
+
+```{r kmeans}
+set.seed(42)
+km <- kmeans(perfiles_scaled, centers = 4, nstart = 25)
+
+perfiles$cluster <- as.factor(km$cluster)
+
+perfiles %>%
+  select(esi, cluster) %>%
+  arrange(cluster)
+```
