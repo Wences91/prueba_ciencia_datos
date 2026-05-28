@@ -1,7 +1,7 @@
 ---
 title: "Fundamentos de ciencia de datos en R"
 author: "Wenceslao Arroyo-Machado<br><a href='https://twitter.com/Wences91' style='font-size: 14px'>@Wences91</a>"
-date: "`r Sys.Date()`"
+date: "28/05/2026"
 output:
   html_document:
     css: style.css
@@ -792,7 +792,7 @@ ggplot(elbow_data, aes(x = k, y = inertia)) +
   theme_classic()
 ```
 
-El codo se aprecia alrededor de k = 4. Nos quedamos con ese valor.
+El "codo" se aprecia alrededor de k = 4. Nos quedamos con ese valor.
 
 ## Aplicar k-means
 
@@ -806,3 +806,90 @@ perfiles %>%
   select(esi, cluster) %>%
   arrange(cluster)
 ```
+
+## Visualización del clustering
+
+Para visualizar el resultado, mostramos los perfiles normalizados con el cluster asignado como facet.
+
+```{r cluster_viz, fig.width=10, fig.height=6}
+cluster_long <- perfiles %>%
+  pivot_longer(cols = c(news, blogs, policy, twitter, facebook, wikipedia),
+               names_to = 'source', values_to = 'mean_mentions') %>%
+  group_by(source) %>%
+  mutate(mean_norm = (mean_mentions - min(mean_mentions)) /
+                     (max(mean_mentions) - min(mean_mentions))) %>%
+  ungroup()
+
+ggplot(cluster_long, aes(x = source, y = esi, fill = mean_norm)) +
+  geom_tile(color = 'white') +
+  scale_fill_viridis(option = 'viridis', name = 'Normalizado') +
+  facet_wrap(~ cluster, scales = 'free_y', ncol = 2,
+             labeller = labeller(cluster = function(x) paste('Cluster', x))) +
+  labs(x = 'Fuente', y = NULL,
+       title = 'Perfiles altmétricos por cluster') +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid = element_blank())
+```
+
+Cada cluster recoge campos ESI con un patrón de mención parecido. Algunos clusters serán dominados por una sola fuente, otros tendrán perfiles más equilibrados. La interpretación sustantiva ya depende del contexto del análisis.
+
+Reducimos las 6 fuentes a 2 dimensiones con PCA para poder representarlas en un gráfico de scatter plot.
+
+```{r scatter_viz, fig.width=10, fig.height=6}
+pca <- prcomp(perfiles_scaled)
+
+scatter_data <- data.frame(esi = perfiles$esi,
+                           cluster = factor(perfiles$cluster),
+                           PC1 = pca$x[, 1],
+                           PC2 = pca$x[, 2])
+
+ggplot(scatter_data, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(size = 4, alpha = 0.8) +
+  geom_text(aes(label = esi), size = 3, vjust = -1, show.legend = FALSE) +
+  scale_color_viridis(discrete = TRUE, name = 'Cluster') +
+  labs(x = 'PC1', y = 'PC2') +
+  theme_classic()
+```
+
+# Exportar resultados
+
+Acabamos exportando datos procesados, resultados del modelo y gráficos. Es buena práctica dejar todos los outputs reproducibles en `results/` (créala primero si no existe).
+
+## Datos agregados
+
+```{r export_csv, eval=FALSE}
+fwrite(df_esi_summary, 'results/resumen_por_esi.csv')
+fwrite(perfiles, 'results/clusters_esi.csv')
+```
+
+## Resultados del modelo
+
+```{r export_modelo, eval=FALSE}
+tidy(modelo, conf.int = TRUE) %>%
+  fwrite('results/modelo_coeficientes.csv')
+
+glance(modelo) %>%
+  fwrite('results/modelo_metricas.csv')
+```
+
+## Gráficos
+
+`ggsave()` exporta la última figura mostrada. Puedes controlar dimensiones, resolución y formato.
+
+```{r export_plot, eval=FALSE}
+ggsave('results/heatmap_esi.png', width = 9, height = 6.5, dpi = 300)
+```
+
+# Para seguir aprendiendo
+
+Esta sesión ha sido un recorrido condensado. Algunas direcciones para profundizar.
+
+-   **Tidyverse**, familia de paquetes que incluye `dplyr`, `tidyr` y `ggplot2`, con [documentación excelente](https://www.tidyverse.org/).
+-   **R for Data Science** (Hadley Wickham), libro gratuito y de referencia disponible en [r4ds.hadley.nz](https://r4ds.hadley.nz/).
+-   **Visualización interactiva** con `plotly` y `ggplotly()`.
+-   **Modelado estadístico avanzado**, GLM, modelos mixtos, regresión robusta.
+-   **Minería de texto avanzada**, `tidytext`, topic modeling con `topicmodels`.
+-   **Quarto**, sucesor de R Markdown, con soporte multilenguaje.
+
+Notebook disponible en [**GitHub**](https://github.com/Wences91/prueba_ciencia_datos/) y datos en [**Zenodo**](https://zenodo.org/records/6473952).
